@@ -99,11 +99,27 @@ class VideoThread(QThread):
             
             if frame_count % inference_interval == 0 or last_heatmap_frame is None:
                 try:
-                    # Run Inference (Retina masks for better quality)
-                    # Lower confidence threshold efficiently allows distant detection
-                    results = model(frame, verbose=False, classes=[0], conf=0.25, retina_masks=True)
+                    # Run Inference (Person + Animals)
+                    # Classes: 0=Person, 14=Bird, 15=Cat, 16=Dog, 17=Horse, 18=Sheep, 19=Cow, 21=Bear
+                    target_classes = [0, 14, 15, 16, 17, 18, 19, 21]
+                    results = model(frame, verbose=False, classes=target_classes, conf=0.25, retina_masks=True)
                     
                     thermal_overlay = None
+
+                    # --- 1. Light Source / Fire Detection (High Intensity) ---
+                    # Simple computer vision: Hot things are BRIGHT (White/Yellow)
+                    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    _, bright_mask = cv2.threshold(gray_frame, 245, 255, cv2.THRESH_BINARY)
+                    
+                    # Find contours of bright spots
+                    contours, _ = cv2.findContours(bright_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    
+                    light_boxes = []
+                    for cnt in contours:
+                        area = cv2.contourArea(cnt)
+                        if area > 20: # Filter small noise
+                            x, y, w, h = cv2.boundingRect(cnt)
+                            light_boxes.append((x, y, w, h))
 
                     if results and results[0].masks is not None:
                         # Extract Masks (N, H, W) -> float32 on GPU usually
@@ -182,20 +198,65 @@ class VideoThread(QThread):
                         thermal_overlay = np.ascontiguousarray(thermal_overlay)
                     
                     # --- Distance Estimation and Overlay (For ALL detected persons) ---
+                    # --- Overlay: Light Sources ---
+                    for (lx, ly, lw, lh) in light_boxes:
+                        # Draw Red Box for Fire/Light
+                        cv2.rectangle(thermal_overlay, (lx, ly), (lx + lw, ly + lh), (0, 0, 255), 2)
+                        cv2.putText(thermal_overlay, "LIGHT SRC | 0.99", (lx, ly - 5),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+
+                    # --- Overlay: Adaptive Distance ---
                     if results and len(results[0].boxes) > 0:
-                        for box in results[0].boxes:
+                        for i, box in enumerate(results[0].boxes):
                             x1, y1, x2, y2 = map(int, box.xyxy[0])
-                            box_h = y2 - y1
                             
-                            if box_h > 0:
-                                known_height_cm = 170  # Average human height
-                                focal_length_approx = 600 # Approximate focal length
-                                distance_cm = (known_height_cm * focal_length_approx) / box_h
-                                distance_m = distance_cm / 100
+                            # Check Class ID
+                            cls_id = int(box.cls[0])
+                            
+                            # Calculate Distance
+                            distance_m = 0.0
+                            dist_type = ""
+                            
+                            # Logic: If Person (0), try Skin-Based Distance
+                            if cls_id == 0:
+                                # Define ROI for this person
+                                # Clamp coordinates
+                                p_y1, p_y2 = max(0, y1), min(new_h, y2)
+                                p_x1, p_x2 = max(0, x1), min(new_w, x2)
                                 
-                                # Draw Distance Label on thermal_overlay
-                                cv2.putText(thermal_overlay, f"Dist: {distance_m:.1f}m", (x1, y1 - 10), 
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
+                                # Crop skin mask to this person
+                                if 'valid_skin_mask' in locals():
+                                    person_skin = valid_skin_mask[p_y1:p_y2, p_x1:p_x2]
+                                    
+                                    # If significant skin detected (Face/Hand)
+                                    if cv2.countNonZero(person_skin) > 20:
+                                        # Find height of the skin blob
+                                        s_contours, _ = cv2.findContours(person_skin, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                        if s_contours:
+                                            # Largest skin blob
+                                            max_c = max(s_contours, key=cv2.contourArea)
+                                            _, _, _, h_skin = cv2.boundingRect(max_c)
+                                            
+                                            if h_skin > 5:
+                                                # Formula: (20cm * Focal) / Skin_Height
+                                                distance_m = (20.0 * 600) / h_skin / 100
+                                                dist_type = "(Skin)"
+                                
+                            # Fallback: Full Body/Object Height
+                            # (Used if no skin found OR if it is an animal)
+                            if distance_m == 0.0:
+                                h_box = y2 - y1
+                                if h_box > 0:
+                                    # Assume standard height 1.7m for Person, 0.5m for Animal (rough avg)
+                                    real_h = 170 if cls_id == 0 else 50 
+                                    distance_m = (real_h * 600) / h_box / 100
+                                    dist_type = "(Body)" if cls_id == 0 else "(Est)"
+
+                            # Draw Label
+                            color = (0, 255, 255) if cls_id == 0 else (50, 255, 50) # Yellow for Person, Green for Animal
+                            label = f"{model.names[cls_id]} {distance_m:.1f}m {dist_type}"
+                            cv2.putText(thermal_overlay, label, (x1, y1 - 10), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
                     
                     # Add static max range overlay
                     cv2.putText(thermal_overlay, f"Max Range: ~10.0m", (20, new_h - 20), 
