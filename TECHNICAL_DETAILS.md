@@ -1,53 +1,68 @@
 # Technical Details & Architecture
 
 ## Overview
-This application is a real-time computer vision tool designed to simulate **Thermal Imaging** using standard RGB webcams. Unlike simple color filters, it employs **AI Segmentation** and **Physiological Logic** to create a biologically accurate representation of heat distribution on the human body.
+This application is a real-time computer vision tool designed to simulate **Thermal Imaging** using standard RGB webcams. It uses **AI Segmentation** for biological targets (Humans, Animals) and **Computer Vision Thresholding** for high-intensity heat sources.
 
 ## Core Technologies
 - **Language**: Python 3.10+
 - **GUI Framework**: PyQt6 (Thread-safe, non-blocking UI)
-- **AI Engine**: Ultralytics YOLOv8/v26 (Segmentation Model)
+- **AI Engine**: Ultralytics YOLOv8/v26 (Small Model: `yolo26s-seg.pt`)
 - **Computer Vision**: OpenCV (cv2), NumPy
 
-## The "Physiological" Heatmap Algorithm
-The core innovation of this project is the **Skin-Aware Thermal Overlay**. It does not simply apply a color map to the detected object; it differentiates between "Insulated" and "Exposed" areas.
+## 1. The "Physiological" Heatmap Algorithm
+We process detected biological entities to simulate heat radiation.
 
-### 1. Instance Segmentation (YOLO)
-We use `yolo26n-seg.pt` (Nano Segmentation Model) to detect humans.
-- **Output**: A precise binary mask ($M_{body}$) defining the exact pixels of the person, excluding the background.
-- **Benefit**: Ensures the "heat" does not spill onto walls or furniture, unlike bounding-box based methods.
+### Instance Segmentation
+We use `yolo26s-seg.pt` (Small Model) to generate binary masks for:
+- **Classes**: Person (0), Bird (14), Cat (15), Dog (16), Horse (17), Sheep (18), Cow (19), Bear (21).
+- **Benefit**: Confines the "heat" layer strictly to the subject's body.
 
-### 2. Skin Detection (HSV Thresholding)
-Inside the body mask, we apply color thresholding to identify exposed skin.
-- **Input**: Converted HSV frame.
-- **Ranges**:
-  - Lower: `[0, 30, 60]`
-  - Upper: `[20, 255, 255]`
-- **Processing**:
-  - A morphological "Open" operation removes noise.
-  - Logical AND with $M_{body}$ creates the Skin Mask ($M_{skin}$).
+### Skin Detection (HSV)
+For Humans (Class 0), we further refine the mask to detect exposed skin:
+- **Logic**: Exposed skin ( Face, Hands) radiates more heat than clothed areas.
+- **Process**:
+  1.  Convert frame to HSV.
+  2.  Threshold for skin tones (`H:0-20`, `S:30-255`, `V:60-255`).
+  3.  Morphological OPEN to remove noise.
+  4.  Result: `valid_skin_mask`.
 
-### 3. Thermal Intensity Mapping
-We construct a single-channel Grayscale Intensity Map ($I$) to represent temperature:
+### Thermal Intensity Mapping ($I$)
 - **Background**: $I = 0$ (Cold/Black)
-- **Clothes ($M_{body} - M_{skin}$)**: $I = 70$ (Warm/Purple/Red)
-- **Skin ($M_{skin}$)**: $I = 255$ (Hot/Yellow/White)
+- **Clothes/Fur**: $I = 70$ (Warm/Purple/Red)
+- **Exposed Skin**: $I = 255$ (Hot/Yellow/White)
+- **Blend**: Gaussian Blur (`31x31`) smooths transitions, simulating heat diffusion.
+- **Color**: `cv2.applyColorMap(..., cv2.COLORMAP_INFERNO)`.
 
-### 4. Organic Blending
-To prevent the result from looking like a cartoon labeling tool, we apply:
-- **Gaussian Blur**: A heavy kernel (`31x31`) blends the sharp boundaries between clothes and skin. This simulates the natural radiation of heat from the body's core.
-- **Colormap**: `cv2.applyColorMap(..., cv2.COLORMAP_INFERNO)` maps the intensities to a thermal spectrum (Black -> Purple -> Red -> Orange -> Yellow -> White).
+## 2. Adaptive Distance Estimation 2.0
+Traditional single-camera distance estimation fails when a user is partially visible (e.g., just a hand). We use a **Context-Aware** approach.
 
-## Distance Estimation
-The application estimates the distance of the user from the camera using a **Pinhole Camera Model** approximation.
-$$ Distance = \frac{\text{Real Height} \times \text{Focal Length}}{\text{Pixel Height}} $$
-- **Real Height**: Assumed ~1.7m (Average).
-- **Focal Length**: Approximated ~600px for standard 720p webcams.
-- **Display**: Real-time overlay above the user's head.
+### Formulas
+The application approximates distance using the Pinhole Camera Model:
+$$ D = \frac{R \times F}{P} $$
+Where $R$ = Real Height, $F$ = Focal Length (~600px), $P$ = Pixel Height.
+
+### Mode A: Skin-Based (Precision)
+- **Trigger**: `if countNonZero(skin_mask) > Threshold`.
+- **Target**: Largest contour in the skin mask (usually Face or Hand).
+- **Constant**: $R \approx 20cm$ (Average Head/Hand Height).
+- **Use Case**: Close-ups (0.2m - 1.0m).
+
+### Mode B: Body-Based (General)
+- **Trigger**: No significant skin mask found OR Non-Human Class.
+- **Target**: Full Bounding Box.
+- **Constant**: 
+  - Human: $R \approx 170cm$
+  - Animal: $R \approx 50cm$ (Rough average for pets).
+- **Use Case**: Full body walking (1.5m - 10.0m).
+
+## 3. High-Intensity Source Detection
+Standard AI models do not detect "Heat" or generic "Fire". We use raw pixel intensity.
+- **Method**: Global Thresholding.
+- **Condition**: `Pixel_Value > 245` (Grayscale).
+- **Process**: Find contours of these "blown out" bright spots.
+- **Result**: Tagged as `LIGHT SRC | 0.99`. Detects light bulbs, the sun, lighters, and open flames.
 
 ## Performance Optimization
-To ensure smooth 30+ FPS playback on standard hardware:
-1.  **Threaded Architecture**: Video capture and AI inference run in a dedicated `QThread` (`VideoThread`), keeping the GUI responsive.
-2.  **Inference Skipping**: AI runs every **3rd frame**. The application displays the *last generated heatmap* during gap frames, maintaining visual smoothness without overloading the GPU/CPU.
-3.  **Resolution Scaling**: Input is resized to width=720px before processing to balance accuracy and speed.
-4.  **Model Warmup**: A dummy inference is run at startup to load model weights into VRAM, preventing the first few seconds of video from stuttering.
+- **Model**: Switched from Nano (`n`) to Small (`s`) for better detection at >5m range.
+- **Resolution**: Processing occurs at **960px width** (HD) to preserve distant details.
+- **Asynchronous**: Inference runs in a separate `QThread`, decoupled from the Main GUI thread.

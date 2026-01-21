@@ -1,6 +1,6 @@
 # HeatMap Vision - Real-Time AI Thermal Simulation
 
-**HeatMap Vision** is a Python-based GUI application that turns a standard webcam into a simulated Thermal Camera. Using advanced **YOLO Segmentation** and **Skin Detection** logic, it creates a physiologically accurate heat map where exposed skin (face, hands) appears "hottest," while clothed areas appear "warm," distinct from the cold background.
+**HeatMap Vision** is a Python-based GUI application that turns a standard webcam into a simulated Thermal Camera. Using advanced **YOLO Segmentation**, **Skin Detection**, and **High-Intensity Thresholding**, it mimics physiological heat signatures for humans and animals, and detects potential fire/light sources.
 
 ![Preview Placeholder](https://via.placeholder.com/800x400?text=HeatMap+Vision+Preview)
 
@@ -22,12 +22,23 @@
 
 ## Features
 
-*   **Dual-Feed Display**: Side-by-side view of the standard raw feed and the AI-augmented thermal feed.
-*   **Physiological Accuracy**: Differentiates between clothes (Insulated/Warm) and skin (Radiating/Hot).
-*   **Real-Time Segmentation**: Heat overlay conforms strictly to the human body shape, ignoring background clutter.
-*   **Distance Estimation**: Estimates and displays the user's distance from the camera in real-time.
-*   **Performance Optimized**: Uses threaded processing and frame skipping to maintain a responsive UI even during heavy inference.
-*   **Smart Warmup**: Pre-loads AI models to prevent startup lag.
+### 🌡️ Physiological Heatmap
+- **Humans**: Differentiates between clothes (Insulated/Warm) and exposed skin (Radiating/Hot).
+- **Animals**: Supports detection for **Cats, Dogs, Birds, Horses, Bears, Sheep, and Cows**.
+
+### 📏 Smart Distance 2.0
+- **Adaptive Precision**: Automatically switches scaling logic based on what is visible.
+    - **Face/Hand Mode**: Uses exposed skin size for accurate close-range measurements (< 1m).
+    - **Body Mode**: Uses full bounding box height for walking subjects (> 2m).
+- Detects subjects up to **10 meters** away.
+
+### 🔥 Heat & Light Source Detection
+- **Fire/Lights**: Detects high-intensity heat sources (light bulbs, lighters, fire) using brightness thresholding.
+- **Visual Alert**: Highlights sources with a **Red Box** and `LIGHT SRC` tag.
+
+### ⚡ Performance
+- **Dual-Feed Display**: Side-by-side view (Raw + Thermal).
+- **Optimized**: Threaded processing, frame skipping (Smart-FPS), and resolution scaling for smooth playback on standard CPUs.
 
 ## Prerequisites
 
@@ -93,9 +104,7 @@ Once dependencies are installed and the virtual environment is active:
 python main.py
 ```
 
-The application window will open. Click **"Start Camera"** to begin.
-
-*Note: The first run may take a few seconds to download the YOLO model weights.*
+*Note: The first run will automatically download the YOLOv8-Small model (detected as `yolo26s-seg.pt`).*
 
 ## Controls
 
@@ -105,8 +114,8 @@ The application window will open. Click **"Start Camera"** to begin.
 
 ## Technical Details
 
-This project uses **Ultralytics YOLOv8/v26** for instance segmentation and **OpenCV** for image processing.
-For a deep dive into the heatmap algorithm, skin detection logic, and distance estimation formulas, please refer to [TECHNICAL_DETAILS.md](TECHNICAL_DETAILS.md).
+This project uses **Ultralytics YOLO** for multi-class instance segmentation and **OpenCV** for image processing.
+For a deep dive into the V2.0 algorithms (Skin-Scaling Distance, animal masking, etc.), please refer to [TECHNICAL_DETAILS.md](TECHNICAL_DETAILS.md).
 
 ## License
 
