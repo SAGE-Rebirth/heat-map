@@ -7,10 +7,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QPixmap, QImage, QFont
 from PyQt6.QtCore import pyqtSlot, Qt
+import logging
 from video_procs import VideoThread
-from utils.logger import setup_logger
 
-logger = setup_logger("GUI")
+logger = logging.getLogger("GUI")
 
 class MainWindow(QMainWindow):
     def __init__(self):

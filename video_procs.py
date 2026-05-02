@@ -1,12 +1,11 @@
 import cv2
+import logging
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal, Qt
 from ultralytics import YOLO
 import time
-from utils.logger import setup_logger
 
-# Initialize logger
-logger = setup_logger("VideoBackend")
+logger = logging.getLogger("VideoBackend")
 
 class VideoThread(QThread):
     """
